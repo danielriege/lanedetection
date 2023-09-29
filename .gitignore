@@ -1,0 +1,6 @@
+output/*
+!output/.gitkeep
+supervisely_projects/
+Pipfile.lock
+__pycache__/
+```
