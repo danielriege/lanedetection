@@ -9,7 +9,8 @@ jupyterlab = "*"
 numpy = "*"
 matplotlib = "*"
 tqdm = "*"
-tensorflow = "*"
+tinygrad = {editable = true, git = "https://github.com/tinygrad/tinygrad.git"}
+appdirs = "*"
 
 [dev-packages]
 

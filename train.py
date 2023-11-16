@@ -9,13 +9,17 @@ import yaml
 import include.supervisely_parser as sp
 from include.utils import dotdict
 from include.logger import printe, printw, printi
-
-from include.tensorflow.models import vgg, mobilenet, tiny
-import include.tensorflow.loss_functions as lf
+from include.data_generator import DataGenerator
+import include.loss_functions as lf
+import include.metrics as m
 import include.plotter as plotter
-import include.tensorflow.metrics as m
-import include.tensorflow.data_generator as dg
-import include.tensorflow.runner as tf_runner
+from models.unet import UNet
+
+from tinygrad.tensor import Tensor
+from tinygrad.nn.optim import Adam
+from tinygrad.nn.state import safe_save, safe_load, get_state_dict, load_state_dict, get_parameters
+from tinygrad.ops import Device
+from tinygrad.jit import TinyJit
 
 VERBOSE = False
 
@@ -74,8 +78,8 @@ def run(dataset_path, output_path, params):
         resizing = (resizing[0], image_width)
 
     # create data generators
-    data_gen_train = dg.DataGenerator(train_set, (image_height, image_width), number_classes, class_description, params.batch_size, resizing, params.use_lower_percentage)
-    data_gen_valid = dg.DataGenerator(validation_set, (image_height, image_width), number_classes, class_description, params.batch_size, resizing, params.use_lower_percentage)
+    data_gen_train = DataGenerator(train_set, (image_height, image_width), number_classes, class_description, params.batch_size, resizing, params.use_lower_percentage)
+    data_gen_valid = DataGenerator(validation_set, (image_height, image_width), number_classes, class_description, params.batch_size, resizing, params.use_lower_percentage)
 
     # define input sizes for network
     if resizing is not None:
@@ -85,54 +89,96 @@ def run(dataset_path, output_path, params):
 
     # load loss function
     if params.loss_function == 'categorical_crossentropy':
-        loss = lf.categorical_crossentropy
-    elif params.loss_function == 'weighted_ce':
-        loss = lf.weighted_ce
+        loss = lf.cross_entropy
     elif params.loss_function == 'dice':
-        loss = lf.dice
+        loss = lf.dice_loss
     elif params.loss_function == 'tversky':
-        loss = lf.tversky
+        loss = lf.tversky_loss
     elif params.loss_function == 'focal_tversky':
-        loss = lf.focal_tversky
+        loss = lf.focal_tversky_loss
     else:
         printe(f"Unknown loss function {params.loss_function}")
         return
     
     # load metrics
-    metrics = [m.iou_score, m.precision_m, m.recall_m, m.f1_score]
+    metrics = [m.iou_score, m.precision, m.recall, m.f1_score]
 
     # load network architecture
-    if params.model == 'vgg':
-        model = vgg(params.name, input_height=input_height, input_width=input_width, number_classes=number_classes+1, learning_rate=params.learning_rate, loss_function=loss, metrics=metrics)
-    elif params.model == 'mobilenet':
-        model = mobilenet(params.name, input_height=input_height, input_width=input_width, number_classes=number_classes+1, learning_rate=params.learning_rate, loss_function=loss, metrics=metrics)
-    elif params.model == 'tiny':
-        model = tiny(params.name, input_height=input_height, input_width=input_width, number_classes=number_classes+1, learning_rate=params.learning_rate, loss_function=loss, metrics=metrics)
-    else:
-        printe(f"Unknown model {params.model}")
-        return
-    
-    if VERBOSE:
-        printi("Model summary:")
-        model.summary()
+    # if params.model == 'vgg':
+    #     model = vgg(params.name, input_height=input_height, input_width=input_width, number_classes=number_classes+1, learning_rate=params.learning_rate, loss_function=loss, metrics=metrics)
+    # elif params.model == 'mobilenet':
+    #     model = mobilenet(params.name, input_height=input_height, input_width=input_width, number_classes=number_classes+1, learning_rate=params.learning_rate, loss_function=loss, metrics=metrics)
+    # elif params.model == 'tiny':from tinygrad.jit import TinyJit
+    #     model = tiny(params.name, input_height=input_height, input_width=input_width, number_classes=number_classes+1, learning_rate=params.learning_rate, loss_function=loss, metrics=metrics)
+    # else:
+    #     printe(f"Unknown model {params.model}")
+    #     return
+    model = UNet(in_channels=3, n_class=number_classes)
+
+    # load optimizer
+    opt = Adam(get_parameters(model), lr=params.learning_rate)
 
     # check if directoy for model exists
     model_path = os.path.join(output_path, params.name)
     if not os.path.isdir(model_path):
         os.mkdir(model_path)
 
+    printi(f"Starting training on {Device.DEFAULT}")
+
+    @TinyJit
+    def train_step_jitted(model, optimizer, X,Y):
+         #forward pass
+        out = model(X)
+        # compute loss
+        loss_tensor = loss(out, Y)
+        # zero gradients
+        optimizer.zero_grad()
+        # backward pass
+        loss_tensor.backward()
+        # update weights
+        optimizer.step()
+        return loss_tensor.realize(), out.realize()
+
     # train model
-    history = tf_runner.train_model(model, data_gen_train, data_gen_valid, output_path, params, model_path)
+    with Tensor.train():
+        history = {v.__name__: [] for v in [loss] + metrics}
+        for epoch in range(params.epochs):
+            history_per_epoch = {v.__name__: [] for v in [loss] + metrics}
+            for step in range(len(data_gen_train)):
+                # sample a batch
+                x, y = data_gen_train[step]
+                batch = Tensor(x, requires_grad=False)
+                batch = batch.permute(0, 3, 1, 2)
+                labels = Tensor(y)
+                labels = labels.permute(0, 3, 1, 2)
+                # load into device (GPU)
+                batch = batch.to(Device.DEFAULT)
+                labels = labels.to(Device.DEFAULT)
+
+                loss_tensor, out = train_step_jitted(model, opt, batch, labels)
+                loss_cpu = loss_tensor.numpy()
+
+                history_per_epoch[loss.__name__].append(loss_cpu)
+                # calculate metrics
+                for metric in metrics:
+                    history_per_epoch[metric.__name__].append(metric(out, labels).realize().numpy())
+            # calculate mean metrics
+            for name in history_per_epoch.keys():
+                history_per_epoch[name] = sum(history_per_epoch[name])/len(history_per_epoch[name])
+                history[name].append(history_per_epoch[name])
+            #print epoch status
+            print(f"Epoch {epoch+1}/{params.epochs} - train: {history_per_epoch}")
 
     # save model
-    model_file_path = os.path.join(model_path, "model.h5")
-    model.save(model_file_path)
+    model_file_path = os.path.join(model_path, "model.safetensor")
+    state_dict = get_state_dict(model)
+    safe_save(state_dict, model_file_path)
     printi(f"Saved model to {model_file_path}")
     
     # save training history
     history_file_path = os.path.join(model_path, "history.json")
     with open(history_file_path, 'w') as f:
-        json.dump(history.history, f)
+        json.dump(history, f)
     printi(f"Saved training history to {history_file_path}")
     # plot training history
     if VERBOSE:
@@ -157,7 +203,7 @@ if __name__ == "__main__":
     argparser.add_argument('-e', '--epochs', type=int, help='Number of epochs to train', default=default_config.epochs)
     argparser.add_argument('-b', '--batch-size', type=int, help='Batch size', default=default_config.batch_size)
     argparser.add_argument('-l', '--learning-rate', type=float, help='Learning rate', default=default_config.learning_rate)
-    argparser.add_argument('-c', '--loss-function', type=str, choices=['categorical_crossentropy', 'weighted_ce', 'dice', 'tversky', 'focal_tversky'], help='Loss function to use for training', default=default_config.loss_function)
+    argparser.add_argument('-c', '--loss-function', type=str, choices=['categorical_crossentropy', 'dice', 'tversky', 'focal_tversky'], help='Loss function to use for training', default=default_config.loss_function)
     argparser.add_argument('-n', '--name', type=str, help='Name of the newly trained model', default=default_config.name)
     # image preprocessing parameters
     argparser.add_argument('--use-lower-percentage', type=float, help="Use only this percentage of the lower part of the image for training. This is useful if you want to train a model that only detects the lane in front of the car. Note: This will be done before a possible resizing, so this may change the 'original' resolution.", default=default_config.use_lower_percentage)
