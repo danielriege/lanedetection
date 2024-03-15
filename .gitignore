@@ -3,4 +3,7 @@ output/*
 supervisely_projects/
 Pipfile.lock
 __pycache__/
-```
+data/
+datasets/
+dataset/
+.venv/

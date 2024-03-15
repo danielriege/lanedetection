@@ -1,8 +1,0 @@
-train_size: 0.8
-model: vgg
-epochs: 10
-batch_size: 1
-learning_rate: 0.0001
-loss_function: categorical_crossentropy
-name: tinygrad_unet
-use_lower_percentage: 0.5

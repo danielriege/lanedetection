@@ -5,10 +5,13 @@ import json
 import os
 import cv2
 import numpy as np
-from . import logger
+from lanedetection.utils import printe, printi, printw
+from typing import List, Tuple, Optional, Dict, Any
 
-# extract the class color description from the obj_class_to_machine_color.json file
-def extract_class_color_description(path_to_project):
+def extract_class_color_description(path_to_project: str) -> Optional[Dict[str, np.ndarray]]:
+    """
+    extract the class color description from the obj_class_to_machine_color.json file
+    """
     obj_class_to_machine_colors = os.path.join(path_to_project, "obj_class_to_machine_color.json")
     if os.path.isfile(obj_class_to_machine_colors):
         with open(obj_class_to_machine_colors, 'r') as file:
@@ -20,8 +23,14 @@ def extract_class_color_description(path_to_project):
     else:
         return None
     
-# check if given path points to a project or dataset
-def check_path(path):
+def check_path(path: str) -> Optional[str]:
+    """
+    check if given path points to a project or dataset
+    Returns:
+    - "project" if path points to a project
+    - "dataset" if path points to a dataset
+    - None if path does not exist
+    """
     if os.path.isdir(path):
         obj_class_file = extract_class_color_description(path)
         if obj_class_file is not None:
@@ -34,39 +43,40 @@ def check_path(path):
         else:
             return "image"
     else:
-        logger.printe(f"Could not find {path}")
+        printe(f"Could not find {path}")
         return None
 
-# checks if the project structure is correct
-def check_project_structure(path_to_project):
+def check_project_structure(path_to_project: str) -> bool:
+    """
+    checks if the project structure is correct
+    """
     # check if obj_class_to_machine_color.json exists
     if not os.path.isfile(os.path.join(path_to_project, "obj_class_to_machine_color.json")):
-        logger.printe("Could not find obj_class_to_machine_color.json. Please make sure your project contains this file.")
+        printe("Could not find obj_class_to_machine_color.json. Please make sure your project contains this file.")
         return False
     # check if the project contains at least one dataset
     if len(os.listdir(path_to_project)) == 1:
-        logger.printe("Project does not contain any datasets.")
+        printe("Project does not contain any datasets.")
         return False
     # check if each dataset contains img and masks_machine directory
     for dataset in os.listdir(path_to_project):
         dataset_path = os.path.join(path_to_project, dataset)
         if os.path.isdir(dataset_path):
             if not os.path.isdir(os.path.join(dataset_path, "img")):
-                logger.printe(f"Dataset {dataset_path} does not contain img directory")
+                printe(f"Dataset {dataset_path} does not contain img directory")
                 return False
             if not os.path.isdir(os.path.join(dataset_path, "masks_machine")):
-                logger.printe(f"Dataset {dataset_path} does not contain masks_machine directory")
+                printe(f"Dataset {dataset_path} does not contain masks_machine directory")
                 return False
     return True
 
-# parse a supervisely project
-# will not load the images but only returns a flat array of 
-# image and corresponding mask paths
-# Later parse_image with these paths needs to be called to load the images
-def parse_project_for_training(path_to_project):
+def parse_project_for_training(path_to_project: str) -> Optional[List[Tuple[str, str]]]:
+    """
+    parse a supervisely project will not load the images but only returns a flat array of image and corresponding mask paths.
+    Later parse_image with these paths needs to be called to load the images
+    """
     project = []
     for dataset_name in os.listdir(path_to_project):
-        print(f"parsing dataset {dataset_name}")
         dataset_path = os.path.join(path_to_project, dataset_name)
         if os.path.isdir(dataset_path):
             dataset = parse_dataset_for_training(dataset_path)
@@ -74,14 +84,16 @@ def parse_project_for_training(path_to_project):
                 project += dataset
     return project
 
-# parse a supervisely project
-# masks will only be included if they contain at least one pixel (e.g. labled)
-# returns a dictionary of datasets (key: dataset name, value: dictionary of images)
-def parse_project(path_to_project, background_class=None):
+def parse_project(path_to_project: str, background_class:Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """
+    parse a supervisely project
+    masks will only be included if they contain at least one pixel (e.g. labled)
+    returns a dictionary of datasets (key: dataset name, value: dictionary of images as in parse_dataset)
+    """
     projects = {}
     class_color_description = extract_class_color_description(path_to_project)
     if class_color_description is None:
-        logger.printe("Could not extract class color description. Please make sure your project contains the file obj_class_to_machine_color.json.")
+        printe("Could not extract class color description. Please make sure your project contains the file obj_class_to_machine_color.json.")
         return
     # list all directories in the project folder
     # for each directory, call parse_dataset
@@ -94,11 +106,12 @@ def parse_project(path_to_project, background_class=None):
             print("successfully parsed dataset " + dataset_name)
     return projects
 
-# parse a supervisely dataset
-# will not load the images but only returns a flat array of 
-# image and corresponding mask paths
-# Later parse_image with these paths needs to be called to load the images
-def parse_dataset_for_training(path_to_dataset):
+def parse_dataset_for_training(path_to_dataset: str) -> Optional[List[Tuple[str, str]]]:
+    """
+    parse a supervisely dataset
+    will not load the images but only returns a flat array of image and corresponding mask paths
+    Later parse_image with these paths needs to be called to load the images
+    """
     if os.path.isdir(path_to_dataset):
         dataset = []
         for img_file in os.listdir(os.path.join(path_to_dataset, "img")):
@@ -110,16 +123,18 @@ def parse_dataset_for_training(path_to_dataset):
                 dataset.append((img_file_path, mask_file_path))
         return dataset
     else:
-        logger.printe(f"Could not find dataset {path_to_dataset}")
+        printe(f"Could not find dataset {path_to_dataset}")
         return
 
-# parse a single dataset
-# returns a dictionary of images (key: image name, value: dictionary of image and masks)
-def parse_dataset(path_to_dataset, class_color_description, background_class):
+def parse_dataset(path_to_dataset: str, class_color_description: Dict[str, np.ndarray], background_class: str) -> Optional[Dict[str, Dict[str, Any]]]:
+    """
+    parse a single dataset
+    returns a dictionary of images (key: image name, value: dictionary of "img" and "masks") with masks being a dictionary of binary masks (one for each class: key: class name, value: binary mask)
+    """
     dataset = {}
     #check if img and masks_machine directory is included in dataset
     if not os.path.isdir(os.path.join(path_to_dataset, "img")) and not os.path.isdir(os.path.join(path_to_dataset, "masks_machine")):
-        logger.printe(f"Dataset {path_to_dataset} does not contain img and masks_machine directory")
+        printe(f"Dataset {path_to_dataset} does not contain img and masks_machine directory")
         return
     # load all images in img directory
     img_path = os.path.join(path_to_dataset, "img")
@@ -129,7 +144,7 @@ def parse_dataset(path_to_dataset, class_color_description, background_class):
     mask_files = os.listdir(mask_path)
     # check if number of images and masks is equal
     if len(img_files) != len(mask_files):
-        logger.printe(f"Number of images and masks is not equal in {path_to_dataset}")
+        printe(f"Number of images and masks is not equal in {path_to_dataset}")
         return
     # for each image, call parse_image
     for img_file in img_files:
@@ -140,8 +155,11 @@ def parse_dataset(path_to_dataset, class_color_description, background_class):
         dataset[img_name] = {"img": img, "masks": masks}
     return dataset
 
-# check if given image as path is labeled
-def is_labeled(path_to_img):
+def is_labeled(path_to_img: str) -> bool:
+    """
+    check if given image as path is labeled
+    """
+
     # path to json is the same as to img, but instead of img dir it is in ann dir
     path_to_json = os.path.join(os.path.dirname(path_to_img).replace("img", "ann"), os.path.basename(path_to_img) + ".json")
     if os.path.isfile(path_to_json):
@@ -149,18 +167,22 @@ def is_labeled(path_to_img):
             data = json.load(file)
         if len(data["objects"]) > 0:
             return True
+    return False
 
-# parse a single image and mask
-# returns the image and a dictionary of binary masks (one for each class)
-def parse_image(path_to_img, path_to_mask, class_color_description, background_class):
+def parse_image(path_to_img: str, path_to_mask: str, class_color_description: Dict[str, np.ndarray], background_class: Optional[str]) -> Optional[Tuple[np.ndarray, Dict[str, np.ndarray]]]:
+    """
+    parse a single image and mask
+    returns the image and a dictionary of binary masks (one for each class)
+    if background_class is set, a mask for the background will be included
+    """
     masks = {}
     # load image and mask
     img = cv2.imread(path_to_img)
     mask = cv2.imread(path_to_mask, cv2.IMREAD_GRAYSCALE)
     # check if image and mask have same size
     if img.shape[:2] != mask.shape[:2]:
-        logger.printe(f"Image and mask have different size in {path_to_img}")
-        return
+        printe(f"Image and mask have different size in {path_to_img}")
+        return None
     # seperate mask into single binary masks (per color in class_color_description one class)
     number_of_found_classes = 0
     for class_name, color in class_color_description.items():
@@ -191,7 +213,7 @@ def parse_image(path_to_img, path_to_mask, class_color_description, background_c
             masks[background_class] = background_mask
     return img, masks
 
-def get_image_size(path_to_img):
+def get_image_size(path_to_img: str) -> Optional[Tuple[int, int]]:
     # load json of corresponding image
     path_to_json = os.path.join(os.path.dirname(path_to_img).replace("img", "ann"), os.path.basename(path_to_img) + ".json")
     if os.path.isfile(path_to_json):
@@ -202,5 +224,5 @@ def get_image_size(path_to_img):
         width = data["size"]["width"]
         return height, width
     else:
-        logger.printe(f"Could not find json for {path_to_img}")
-        return
+        printe(f"Could not find json for {path_to_img}")
+        return None
