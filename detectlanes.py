@@ -10,9 +10,9 @@ from lanedetection.utils import printe, printw, printi, getenv
 import torch
 import torch.nn as nn
 
-RESIZE_WIDTH = 160
-RESIZE_HEIGHT = 64
-USE_LOWER_PERCENTAGE = 0.7
+RESIZE_WIDTH = 320
+RESIZE_HEIGHT = 128
+USE_LOWER_PERCENTAGE = 1.0
 
 USE_BACKGROUND = True
 
@@ -81,6 +81,7 @@ def inference(input: str, model: object) -> None:
         #cv2.imshow("test", cv2.cvtColor(y.transpose(1,2,0)[:,:,1].astype(np.float32), cv2.COLOR_GRAY2BGR))
         times.append((time.perf_counter() - st)*1000)
         cv2.imshow("Inference", rgb_from_masks(y[:-1,:,:])*255)
+        cv2.imshow("Input", data[step])
         if cv2.waitKey(wait_time) & 0xFF == ord('q'):
             break
         t.set_description(f"Step: {step+1}/{data.shape[0]} | {times[-1]:.2f} ms/step")
@@ -92,6 +93,8 @@ if __name__ == "__main__":
     data_input = sys.argv[2] if weights else sys.argv[1]
     if weights:
         model.load_state_dict(torch.load(weights, map_location=device))
+    else:
+        model.load_pretrained(device)
     inference(data_input, model)
         
         

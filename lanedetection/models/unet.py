@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Any, List, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional
+import os
 
 class ConvBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, n_conv: int) -> None:
@@ -42,9 +43,11 @@ class ConvBlockTranspose(nn.Module):
 class VGGU(nn.Module):
     def __init__(self, n_classes=7, n: int=16) -> None:
         super(VGGU, self).__init__()
+        self.n_classes = n_classes
+        self.n = n
         self.blocks = {
             16: [(64, 2), (128, 2), (256, 3), (512, 3), (512,3)],
-            8: [(24, 2), (32, 2), (48, 2), (128, 2), (256,2)]
+            8: [(32, 2), (48, 2), (128, 2), (128, 3), (256,3)]
             }
         self.upblocks = list(reversed(self.blocks[n]))
         self.conv_blocks = nn.ModuleList([ConvBlock(3 if i == 0 else self.blocks[n][i-1][0], out_channels, n_conv) for i, (out_channels, n_conv) in enumerate(self.blocks[n])])
@@ -67,7 +70,27 @@ class VGGU(nn.Module):
         x = self.last_conv1(x)
         x = F.relu(self.bn1(x))
         x = self.dropout1(x)
-        return F.sigmoid(self.last_conv2(x))
+        return F.softmax(self.last_conv2(x), dim=1)
+    
+    def load_pretrained(self, device) -> bool:
+        """
+        Loads the pretrained weights for the model.
+        Provide torch device for right mapping location.
+        Returns True if pretrained weights are found, False otherwise.
+        """
+        if (self.n, self.n_classes) in model_urls:
+            model_url = model_urls[(self.n, self.n_classes)]
+            cached_file = os.path.join("/tmp", os.path.basename(model_url))
+            if not os.path.exists(cached_file):
+                torch.hub.download_url_to_file(model_url, cached_file)
+            self.load_state_dict(torch.load(cached_file, map_location=device))
+            return True
+        print(f"No pretrained weights found for model with n={self.n} and n_classes={self.n_classes}.")
+        return False
+    
+model_urls: Dict[Tuple[int,int], str] = {   
+    (8,7): "http://riege.com.de/lanedetection/vgg8u_7c.pt",
+}
     
 VGG16U = lambda n_classes=7: VGGU(n_classes=n_classes, n=16)
 VGG8U = lambda n_classes=7: VGGU(n_classes=n_classes, n=8)

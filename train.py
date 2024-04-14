@@ -14,15 +14,13 @@ import torch.nn.functional as F
 # ********* hyperparameters *********
 
 LEARNING_RATE = 1e-3
-STEPS = 4000
+STEPS = 6000
 BATCH_SIZE = 32
 TRAIN_SIZE = 0.95
-RESIZE_WIDTH = 160
-RESIZE_HEIGHT = 64
-USE_LOWER_PERCENTAGE = 0.7
+RESIZE_WIDTH = 320
+RESIZE_HEIGHT = 128
+USE_LOWER_PERCENTAGE = 1.0
 USE_BACKGROUND = True
-
-PLOT = getenv("PLOT")
 
 DATASET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "./data/supervisely_project")
 OUTPUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "./output/")
@@ -30,7 +28,7 @@ OUTPUT_FILE = os.path.join(OUTPUT_PATH, "model.pt")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def focal_tversky_loss(y_true: torch.Tensor, y_pred: torch.Tensor, smooth = 1e-5, alpha = 0.3, gamma=0.75):
+def focal_tversky_loss(y_true: torch.Tensor, y_pred: torch.Tensor, smooth = 1e-5, alpha = 0.6, gamma=0.75):
     true_pos = (y_true * y_pred).sum(axis=(0,2,3)) # take sum over B, H, W
     false_neg = (y_true * (1-y_pred)).sum(axis=(0,2,3))
     false_pos = ((1-y_true) * y_pred).sum(axis=(0,2,3))
@@ -52,7 +50,7 @@ def create_loss_graph(loss: List[float], val_loss: List[float]):
     plt.plot(loss, label="loss")
     plt.plot(val_loss, label="val_loss")
     plt.legend()
-    plt.xlabel("steps")
+    plt.xlabel("steps * 20")
     plt.ylabel("loss")
     plt.savefig(os.path.join(OUTPUT_PATH, "loss.png"))
 
@@ -62,7 +60,7 @@ def create_iou_graph(ious: List[float], val_ious: List[float]):
     plt.plot(ious, label="iou")
     plt.plot(val_ious, label="val_iou")
     plt.legend()
-    plt.xlabel("steps")
+    plt.xlabel("steps * 20")
     plt.ylabel("loss")
     plt.savefig(os.path.join(OUTPUT_PATH, "iou.png"))
 
@@ -91,7 +89,7 @@ if __name__ == "__main__":
     model.to(device)
     opt = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    loss_fn = dice_loss
+    loss_fn = focal_tversky_loss
 
     def train_step(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         opt.zero_grad()
@@ -131,5 +129,5 @@ if __name__ == "__main__":
     printi(f"Saving model to {OUTPUT_FILE}")
     torch.save(model.state_dict(), OUTPUT_FILE)
 
-    if PLOT: create_loss_graph([sum(losses[i:i+window_sz])/window_sz for i in range(0, len(losses), window_sz)], val_losses)
-    if PLOT: create_iou_graph(ious, val_ious)
+    create_loss_graph([sum(losses[i:i+window_sz])/window_sz for i in range(0, len(losses), window_sz)], val_losses)
+    create_iou_graph(ious, val_ious)
