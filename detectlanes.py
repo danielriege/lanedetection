@@ -1,15 +1,22 @@
 from typing import Union, List, Tuple
 import os, cv2, time, tqdm, sys
 import numpy as np
-from tinygrad import Tensor, TinyJit, nn
+
 from lanedetection.data_generator import DataGenerator
 from lanedetection.models.unet import VGG16U, VGG8U
 import lanedetection.supervisely_parser as sp
 from lanedetection.utils import printe, printw, printi, getenv
 
-RESIZE_WIDTH = 320
-RESIZE_HEIGHT = 128
+import torch
+import torch.nn as nn
+
+RESIZE_WIDTH = 160
+RESIZE_HEIGHT = 64
 USE_LOWER_PERCENTAGE = 0.7
+
+USE_BACKGROUND = True
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_video(path: str) -> np.ndarray:
     """ Loads video into RAM """
@@ -60,20 +67,17 @@ def inference(input: str, model: object) -> None:
     assert data is not None, f"File {input} has wrong format."
     assert len(data.shape) == 4, f"data has wrong shape."
 
-    @TinyJit
-    def run(x: Tensor) -> Tensor:
-        Tensor.no_grad = True
-        out = model(x).realize()
-        Tensor.no_grad = False
-        return out
+    model.to(device)
+    model.eval()
     
     wait_time = 30 if data.shape[0] > 10 else 0
     times = []
     cv2.namedWindow("Inference", cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO | cv2.WINDOW_GUI_EXPANDED)
     for step in (t:=tqdm.trange(data.shape[0])):
         st = time.perf_counter()
-        x = Tensor(DataGenerator.preprocess(data[step], USE_LOWER_PERCENTAGE, (RESIZE_HEIGHT, RESIZE_WIDTH)).transpose(2,0,1)).unsqueeze(0)
-        y = run(x).numpy()[0]
+        x = torch.from_numpy(DataGenerator.preprocess(data[step], USE_LOWER_PERCENTAGE, (RESIZE_HEIGHT, RESIZE_WIDTH)).transpose(2,0,1)).to(device).unsqueeze(0)
+        with torch.no_grad():
+            y = model(x)[0].cpu().numpy()
         #cv2.imshow("test", cv2.cvtColor(y.transpose(1,2,0)[:,:,1].astype(np.float32), cv2.COLOR_GRAY2BGR))
         times.append((time.perf_counter() - st)*1000)
         cv2.imshow("Inference", rgb_from_masks(y[:-1,:,:])*255)
@@ -83,12 +87,11 @@ def inference(input: str, model: object) -> None:
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    model = VGG8U(n_classes=6)
+    model = VGG8U(n_classes=7 if USE_BACKGROUND else 6)
     weights = sys.argv[1] if len(sys.argv) > 2 else None
     data_input = sys.argv[2] if weights else sys.argv[1]
     if weights:
-        state_dict = nn.state.safe_load(weights)
-        nn.state.load_state_dict(model, state_dict)
+        model.load_state_dict(torch.load(weights, map_location=device))
     inference(data_input, model)
         
         

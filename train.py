@@ -7,37 +7,41 @@ from lanedetection.utils import printe, printw, printi, getenv
 from lanedetection.data_generator import DataGenerator
 from lanedetection.models.unet import VGG16U, VGG8U
 
-from tinygrad import Tensor, nn, Device, TinyJit
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 # ********* hyperparameters *********
 
 LEARNING_RATE = 1e-3
 STEPS = 4000
-BATCH_SIZE = 4
+BATCH_SIZE = 32
 TRAIN_SIZE = 0.95
-RESIZE_WIDTH = 640
-RESIZE_HEIGHT = 224
+RESIZE_WIDTH = 160
+RESIZE_HEIGHT = 64
 USE_LOWER_PERCENTAGE = 0.7
-USE_BACKGROUND = False
+USE_BACKGROUND = True
 
 PLOT = getenv("PLOT")
 
 DATASET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "./data/supervisely_project")
 OUTPUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "./output/")
-OUTPUT_FILE = os.path.join(OUTPUT_PATH, "model.safetensor")
+OUTPUT_FILE = os.path.join(OUTPUT_PATH, "model.pt")
 
-def focal_tversky_loss(y_true: Tensor, y_pred: Tensor, smooth = 1e-5, alpha = 0.3, gamma=0.75):
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def focal_tversky_loss(y_true: torch.Tensor, y_pred: torch.Tensor, smooth = 1e-5, alpha = 0.3, gamma=0.75):
     true_pos = (y_true * y_pred).sum(axis=(0,2,3)) # take sum over B, H, W
     false_neg = (y_true * (1-y_pred)).sum(axis=(0,2,3))
     false_pos = ((1-y_true) * y_pred).sum(axis=(0,2,3))
     return (1 - (true_pos) / (true_pos + (1-alpha)*false_neg + alpha*false_pos + smooth)).pow(gamma).mean()
 
-def dice_loss(y_true: Tensor, y_pred: Tensor, smooth = 1e-5):
+def dice_loss(y_true: torch.Tensor, y_pred: torch.Tensor, smooth = 1e-5):
     intersection = (y_true * y_pred).sum(axis=(0,2,3))
     union = (y_true + y_pred).sum(axis=(0,2,3))
     return 1 - ((2 * intersection + smooth) / (union + smooth)).mean()
 
-def iou_score(y_true: Tensor, y_pred: Tensor, smooth = 1e-5) -> Tensor:
+def iou_score(y_true: torch.Tensor, y_pred: torch.Tensor, smooth = 1e-5) -> torch.Tensor:
     intersection = (y_true * y_pred).sum(axis=(0,2,3))
     union = (y_true + y_pred).sum(axis=(0,2,3)) - intersection
     return ((intersection + smooth) / (union + smooth)).mean()
@@ -84,53 +88,48 @@ if __name__ == "__main__":
     data_gen_valid = DataGenerator(validation_set, (image_height, image_width), n_classes, class_description, BATCH_SIZE, resizing, USE_LOWER_PERCENTAGE, include_background=USE_BACKGROUND)
 
     model = VGG8U(n_classes=n_classes)
-    opt = nn.optim.Adam(nn.state.get_parameters(model), lr=LEARNING_RATE)
+    model.to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     loss_fn = dice_loss
 
-    @TinyJit
-    def train_step(x: Tensor, y: Tensor) -> Tensor:
-        with Tensor.train():
-            opt.zero_grad()
-            out = model(x)
-            loss = loss_fn(y, out)
-            loss.backward()
-            opt.step()
-            return loss
+    def train_step(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        opt.zero_grad()
+        loss = loss_fn(y, model(x))
+        loss.backward()
+        opt.step()
+        return loss
     
-    @TinyJit
-    def get_masks(x: Tensor) -> Tensor:
-        Tensor.no_grad = True
-        out = model(x).realize()
-        Tensor.no_grad = False
+    def get_masks(x: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            out = model(x)
         return out
 
     window_sz = 20
     losses, val_losses, ious, val_ious = [float('inf') for _ in range(window_sz)], [float('inf')], [float('inf')], [float('inf')]
-    printi(f"Starting training on {Device.DEFAULT} | model params: {sum([p.numel() for p in nn.state.get_parameters(model)]):,}")
+    printi(f"Starting training on {device} | model params: {sum([p.numel() for p in model.parameters()]):,}")
     try:
         for step in (t:=tqdm.trange(STEPS)):
             x, y = data_gen_train()
-            x,y = Tensor(x), Tensor(y)
-            loss = train_step(x, y).item()
+            x,y = torch.from_numpy(x).to(device), torch.from_numpy(y).to(device)
+            loss = train_step(x, y).cpu().item()
             losses.append(loss)
 
             if step % window_sz == 0 and step != 0:
                 # validation
                 val_x, val_y = data_gen_valid()
-                val_x, val_y = Tensor(val_x), Tensor(val_y)
+                val_x, val_y = torch.from_numpy(val_x).to(device), torch.from_numpy(val_y).to(device)
                 val_y_pred = get_masks(val_x)
-                val_losses.append(loss_fn(val_y, val_y_pred).item())
+                val_losses.append(loss_fn(val_y, val_y_pred).cpu().item())
                 # metric
-                ious.append(iou_score(y, get_masks(x)).item())
-                val_ious.append(iou_score(val_y, val_y_pred).item())
+                ious.append(iou_score(y, get_masks(x)).cpu().item())
+                val_ious.append(iou_score(val_y, val_y_pred).cpu().item())
             t.set_description(f"loss: {sum(losses[-window_sz:])/window_sz:.5f} | val_loss: {val_losses[-1]:.5f} | iou_train: {ious[-1]:.3f} | iou_val: {val_ious[-1]:.3f}")
     except KeyboardInterrupt:
         printw("Training interrupted")
     # save model
     printi(f"Saving model to {OUTPUT_FILE}")
-    state_dict = nn.state.get_state_dict(model)
-    nn.state.safe_save(state_dict, OUTPUT_FILE)
+    torch.save(model.state_dict(), OUTPUT_FILE)
 
     if PLOT: create_loss_graph([sum(losses[i:i+window_sz])/window_sz for i in range(0, len(losses), window_sz)], val_losses)
     if PLOT: create_iou_graph(ious, val_ious)

@@ -1,54 +1,61 @@
-from tinygrad import Tensor, nn
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from typing import Any, List, Tuple, Optional
 
-class ConvBlock:
+class ConvBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, n_conv: int) -> None:
-        self.convs = [nn.Conv2d(in_channels if i == 0 else out_channels, out_channels, 3, padding=1) for i in range(n_conv)]
-        self.bns = [nn.BatchNorm2d(out_channels) for _ in range(n_conv)]
+        super(ConvBlock, self).__init__()
+        self.convs = nn.ModuleList([nn.Conv2d(in_channels if i == 0 else out_channels, out_channels, 3, padding=1) for i in range(n_conv)])
+        self.bns = nn.ModuleList([nn.BatchNorm2d(out_channels) for _ in range(n_conv)])
+        self.droputs = nn.ModuleList([nn.Dropout(0.3) for _ in range(n_conv)])
+        self.maxpool = nn.MaxPool2d(2)
     
-    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
-        for bn, conv in zip(self.bns, self.convs):
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        for bn, conv, dropout in zip(self.bns, self.convs, self.droputs):
             x = conv(x)
-            x = bn(x).relu().dropout(0.3)
-        return x.max_pool2d(), x # skip conn
+            x = F.relu(bn(x))
+            x = dropout(x)
+        return self.maxpool(x), x # skip conn
     
-    def __call__(self, x: Tensor) -> Tuple[Tensor, Tensor]:
-        return self.forward(x)
-    
-class ConvBlockTranspose:
+class ConvBlockTranspose(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, fct: int = 2) -> None:
+        super(ConvBlockTranspose, self).__init__()
         self.conv1 = nn.Conv2d(in_channels*fct, in_channels, 3, padding=1)
         self.bn1 = nn.BatchNorm2d(in_channels)
-        self.conv2 = nn.ConvTranspose2d(in_channels, out_channels, 3, stride=2, output_padding=-1)
+        self.dropout1 = nn.Dropout(0.3)
+        self.conv2 = nn.ConvTranspose2d(in_channels, out_channels, 3, stride=2, padding=1, output_padding=1)
         self.bn2 = nn.BatchNorm2d(out_channels)
+        self.dropout2 = nn.Dropout(0.3)
     
-    def forward(self, x: Tensor, skip_conn: Optional[Tensor]) -> Tensor:
+    def forward(self, x: torch.Tensor, skip_conn: Optional[torch.Tensor]) -> torch.Tensor:
         x = self.conv1(x)
-        x = self.bn1(x).relu().dropout(0.3)
+        x = F.relu(self.bn1(x))
+        x = self.dropout1(x)
         x = self.conv2(x)
-        x = self.bn2(x).relu().dropout(0.3)
+        x = F.relu(self.bn2(x))
+        x = self.dropout2(x)
         if skip_conn is not None:
-            x = x.cat(skip_conn, dim=1)
+            x = torch.cat((x, skip_conn), dim=1)
         return x
-    
-    def __call__(self, x: Tensor, skip_conn: Optional[Tensor]) -> Tensor:
-        return self.forward(x, skip_conn)
 
-class VGGU:
+class VGGU(nn.Module):
     def __init__(self, n_classes=7, n: int=16) -> None:
+        super(VGGU, self).__init__()
         self.blocks = {
             16: [(64, 2), (128, 2), (256, 3), (512, 3), (512,3)],
             8: [(24, 2), (32, 2), (48, 2), (128, 2), (256,2)]
             }
         self.upblocks = list(reversed(self.blocks[n]))
-        self.conv_blocks = [ConvBlock(3 if i == 0 else self.blocks[n][i-1][0], out_channels, n_conv) for i, (out_channels, n_conv) in enumerate(self.blocks[n])]
-        self.upconv_blocks = [ConvBlockTranspose(self.blocks[n][-1][0] if i == 0 else self.upblocks[i-1][0], out_channels, 1 if i == 0 else 2) for i, (out_channels, _) in enumerate(self.upblocks)]
+        self.conv_blocks = nn.ModuleList([ConvBlock(3 if i == 0 else self.blocks[n][i-1][0], out_channels, n_conv) for i, (out_channels, n_conv) in enumerate(self.blocks[n])])
+        self.upconv_blocks = nn.ModuleList([ConvBlockTranspose(self.blocks[n][-1][0] if i == 0 else self.upblocks[i-1][0], out_channels, 1 if i == 0 else 2) for i, (out_channels, _) in enumerate(self.upblocks)])
         last_n_channels = self.blocks[n][0][0]
         self.last_conv1 = nn.Conv2d(last_n_channels*2, last_n_channels, 3, padding=1)
         self.bn1 = nn.BatchNorm2d(last_n_channels)
+        self.dropout1 = nn.Dropout(0.3)
         self.last_conv2 = nn.Conv2d(last_n_channels, n_classes, 3, padding=1)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         # encoder
         skips = [None] # for last layer
         for block in self.conv_blocks:
@@ -58,18 +65,15 @@ class VGGU:
         for block in self.upconv_blocks:
             x = block(x, skips.pop())
         x = self.last_conv1(x)
-        x = self.bn1(x).relu().dropout(0.3)
-        return self.last_conv2(x).sigmoid()
-    
-    def __call__(self, x: Tensor) -> Tensor:
-        return self.forward(x)
+        x = F.relu(self.bn1(x))
+        x = self.dropout1(x)
+        return F.sigmoid(self.last_conv2(x))
     
 VGG16U = lambda n_classes=7: VGGU(n_classes=n_classes, n=16)
 VGG8U = lambda n_classes=7: VGGU(n_classes=n_classes, n=8)
 
 if __name__ == "__main__":
     m = VGG16U()
-    x = Tensor.randn(1, 3, 64, 160)
+    x = torch.randn(1, 3, 64, 160)
     y = m(x)
     assert y.shape == (1, 7, 64, 160)
-        
