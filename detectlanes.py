@@ -37,11 +37,11 @@ def rgb_from_masks(masks: np.ndarray) -> np.ndarray:
     """ Converts masks to RGB """
     idx_to_color = {
         0: [0,0,1], # outer
-        1: [1,0,0], # hold line
-        2: [1,1,0], # zebra
-        3: [0,1,1], # solid
-        4: [0,1,0], # dashed
-        5: [1,0,1]  # area
+        1: [0,1,0], # dashed
+        2: [0,1,1], # solid
+        3: [1,0,0], # hold line
+        4: [1,0,1],  # area
+        5: [1,1,0], # zebra
     }
     assert len(masks.shape) == 3, f"masks has wrong shape."
     rgb = np.zeros((masks.shape[1], masks.shape[2], 3), dtype=np.float32)
