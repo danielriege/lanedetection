@@ -18,7 +18,7 @@ STEPS = 6000
 BATCH_SIZE = 16
 TRAIN_SIZE = 0.95
 RESIZE_WIDTH = 320
-RESIZE_HEIGHT = 240
+RESIZE_HEIGHT = 224
 USE_LOWER_PERCENTAGE = 1.0
 USE_BACKGROUND = True
 
@@ -28,7 +28,7 @@ OUTPUT_FILE = os.path.join(OUTPUT_PATH, "model.pt")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def focal_tversky_loss(y_true: torch.Tensor, y_pred: torch.Tensor, smooth = 1e-5, alpha = 0.6, gamma=0.75):
+def focal_tversky_loss(y_true: torch.Tensor, y_pred: torch.Tensor, smooth = 1e-5, alpha = 0.5, gamma=1.0):
     true_pos = (y_true * y_pred).sum(axis=(0,2,3)) # take sum over B, H, W
     false_neg = (y_true * (1-y_pred)).sum(axis=(0,2,3))
     false_pos = ((1-y_true) * y_pred).sum(axis=(0,2,3))
