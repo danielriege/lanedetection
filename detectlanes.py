@@ -16,7 +16,7 @@ USE_LOWER_PERCENTAGE = 1.0
 
 USE_BACKGROUND = True
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 
 def load_video(path: str) -> np.ndarray:
     """ Loads video into RAM """
