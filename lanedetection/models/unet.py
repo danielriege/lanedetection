@@ -47,7 +47,7 @@ class VGGU(nn.Module):
         self.n = n
         self.blocks = {
             16: [(64, 2), (128, 2), (256, 3), (512, 3), (512,3)],
-            8: [(32, 2), (64, 2), (128, 2), (256, 3), (256,3)]
+            8: [(32, 2), (48, 2), (64, 3), (128, 3), (256,3)]
             }
         self.upblocks = list(reversed(self.blocks[n]))
         self.conv_blocks = nn.ModuleList([ConvBlock(3 if i == 0 else self.blocks[n][i-1][0], out_channels, n_conv) for i, (out_channels, n_conv) in enumerate(self.blocks[n])])
