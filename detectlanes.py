@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 
 RESIZE_WIDTH = 320
-RESIZE_HEIGHT = 128
+RESIZE_HEIGHT = 224
 USE_LOWER_PERCENTAGE = 1.0
 
 USE_BACKGROUND = True
