@@ -89,7 +89,7 @@ if __name__ == "__main__":
     model.to(device)
     opt = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    loss_fn = dice_loss
+    loss_fn = focal_tversky_loss
 
     def train_step(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         opt.zero_grad()
